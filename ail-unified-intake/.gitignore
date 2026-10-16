@@ -1,0 +1,9 @@
+node_modules/
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+# 実クライアントの実データseedはコミットしない（個人情報・機微情報）
+db/seed.your.sql
+dist/

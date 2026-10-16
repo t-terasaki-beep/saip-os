@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>オンライン秘書OS 管理コンソール</title>
+<style>
+  :root{--bg:#0f1221;--panel:#171a2b;--ink:#e8eaf2;--mut:#9aa3b2;--line:#262a41;--accent:#5b8cff;--amber:#f5a524;--green:#2bb673;--red:#e5484d}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 system-ui,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
+  header h1{font-size:15px;margin:0;font-weight:700}
+  header .who{margin-left:auto;color:var(--mut);font-size:12px}
+  .tabs{display:flex;gap:4px;padding:8px 16px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+  .tab{padding:6px 12px;border-radius:8px;cursor:pointer;color:var(--mut);border:1px solid transparent}
+  .tab.on{background:#1f2440;color:var(--ink);border-color:var(--line)}
+  main{padding:14px 16px;max-width:1100px}
+  table{width:100%;border-collapse:collapse} th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--mut);font-weight:600} tr.row{cursor:pointer} tr.row:hover{background:#1b1f36}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;border:1px solid var(--line);color:var(--mut)}
+  .pill.cat{background:#1b2550;color:#a9c0ff;border-color:#2b3b7a}
+  .pill.urgent{background:#3a1416;color:#ff9a9d;border-color:#5a1e21}
+  .pill.high{background:#3a2a10;color:#ffce7a;border-color:#5a4318}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin:10px 0}
+  h4{margin:0 0 8px} .mut{color:var(--mut)} .sp{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  input,select{background:#0e1120;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 10px;font-size:13px}
+  #drawer{position:fixed;top:0;right:0;height:100%;width:min(560px,96vw);background:var(--panel);border-left:1px solid var(--line);transform:translateX(100%);transition:.18s;overflow:auto;padding:16px;z-index:10}
+  #drawer.on{transform:none} .close{float:right;background:transparent;border:1px solid var(--line);color:var(--mut)}
+  .login{max-width:360px;margin:12vh auto;text-align:center}
+  .warn{border-left:4px solid var(--amber);background:#241c0a}
+  .cand{display:flex;justify-content:space-between;border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0}
+  .ok{color:var(--green)} .bad{color:var(--red)} code{background:#0e1120;padding:1px 5px;border-radius:5px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const S = { token: localStorage.getItem("ail_token")||"", me:null, tab:"inbox", rows:[] };
+const CAT = {quotation_invoice:"請求・見積",payment_followup:"入金確認",accounting_entry:"記帳・経費",attendance_payroll_prep:"勤怠・給与",executive_operations:"役員サポート",other:"その他"};
+const H = () => ({ "Authorization":"Bearer "+S.token, "Content-Type":"application/json" });
+const esc = s => (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const dt = ms => ms? new Date(ms).toLocaleString("ja-JP",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}) : "—";
+
+async function api(path, opt={}){ const r = await fetch(path,{...opt,headers:H()}); if(r.status===401){logout();throw new Error("401");} return r.json(); }
+
+function logout(){ S.token=""; localStorage.removeItem("ail_token"); render(); }
+
+async function login(t){ S.token=t.trim(); localStorage.setItem("ail_token",S.token);
+  try{ S.me = await api("/api/me"); render(); loadInbox(); }catch(e){ S.me=null; alert("トークンが無効です"); } }
+
+async function boot(){ if(!S.token){ render(); return; }
+  try{ S.me = await api("/api/me"); }catch{ S.me=null } render(); if(S.me) loadInbox(); }
+
+async function loadInbox(){ S.rows = await api("/api/inbox"); render(); }
+
+function filtered(){
+  const now=Date.now();
+  if(S.tab==="need") return S.rows.filter(r=>r.status==="analyzed"||r.status==="inbox");
+  if(S.tab==="unassigned") return S.rows.filter(r=>!r.assignee_name && r.status!=="done");
+  if(S.tab==="overdue") return S.rows.filter(r=>r.deadline_at && r.deadline_at<now && r.status!=="done");
+  if(S.tab==="active") return S.rows.filter(r=>r.status==="assigned"||r.status==="in_progress");
+  return S.rows;
+}
+
+function render(){
+  const app=document.getElementById("app");
+  if(!S.me){ app.innerHTML = `<div class="login"><h2>オンライン秘書OS</h2><p class="mut">アクセストークンでログイン</p>
+    <div class="sp" style="justify-content:center"><input id="tk" placeholder="トークン" value="${esc(S.token)}" style="width:220px"><button onclick="login(document.getElementById('tk').value)">ログイン</button></div></div>`;
+    return; }
+  const tabs=[["inbox","統合インボックス"],["need","要確認"],["unassigned","割当待ち"],["overdue","期限超過"],["active","稼働"],["analytics","分析"]];
+  app.innerHTML = `
+  <header><h1>🗂 オンライン秘書OS 管理コンソール</h1>
+    <span class="who">${esc(S.me.name)}（${esc(S.me.role)}）</span>
+    <button class="ghost" onclick="logout()">ログアウト</button></header>
+  <div class="tabs">${tabs.map(([k,l])=>`<div class="tab ${S.tab===k?'on':''}" onclick="go('${k}')">${l}</div>`).join("")}</div>
+  <main id="main"></main>
+  <div id="drawer"></div>`;
+  if(S.tab==="analytics") renderAnalytics(); else renderTable();
+}
+
+function go(k){ S.tab=k; render(); if(k==="analytics") renderAnalytics(); }
+
+function renderTable(){
+  const rows=filtered();
+  document.getElementById("main").innerHTML = `
+    <div class="sp" style="margin-bottom:8px"><button class="ghost" onclick="loadInbox()">↻ 更新</button>
+      <span class="mut">${rows.length}件</span></div>
+    <table><thead><tr><th>受付</th><th>件名</th><th>カテゴリ</th><th>クライアント</th><th>担当</th><th>期限</th><th>状態</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr class="row" onclick="openTask('${r.id}')">
+      <td class="mut">${dt(r.created_at)}</td>
+      <td>${esc(r.title)||"<span class='mut'>(無題)</span>"} ${r.priority==="urgent"?'<span class="pill urgent">至急</span>':r.priority==="high"?'<span class="pill high">急ぎ</span>':''}</td>
+      <td>${r.category?`<span class="pill cat">${CAT[r.category]||r.category}</span>`:'<span class="mut">—</span>'}</td>
+      <td>${esc(r.client_name)||'<span class="mut">未特定</span>'}</td>
+      <td>${esc(r.assignee_name)||'<span class="mut">未割当</span>'}</td>
+      <td class="mut">${dt(r.deadline_at)}</td>
+      <td><span class="pill">${esc(r.status)}</span></td></tr>`).join("")||`<tr><td colspan=7 class="mut">該当なし</td></tr>`}</tbody></table>`;
+}
+
+async function renderAnalytics(){
+  const m = await api("/api/metrics");
+  document.getElementById("main").innerHTML = `
+    <div class="box"><h4>実測メトリクス（品質・速度評価は実装せず、素の実測のみ）</h4>
+    <table>
+      <tr><td>総タスク</td><td>${m.total}</td></tr>
+      <tr><td>解析済み</td><td>${m.analyzed}</td></tr>
+      <tr><td>割当済み</td><td>${m.assigned}</td></tr>
+      <tr><td>完了</td><td>${m.done}</td></tr>
+      <tr><td>自動化率（解析到達）</td><td>${m.automation_rate==null?"—":(m.automation_rate*100).toFixed(0)+"%"}</td></tr>
+      <tr><td>確認要した率</td><td>${(m.human_edit_rate*100).toFixed(0)}%</td></tr>
+    </table>
+    <p class="mut">※ 完了数・実績時間・想定対実績差・差戻し率の実データが貯まってから評価ロジックを定義します。</p></div>`;
+}
+
+async function openTask(id){
+  const d = await api("/api/tasks/"+id);
+  const dr=document.getElementById("drawer"); dr.classList.add("on");
+  const t=d.task;
+  const mgr = S.me.role==="manager"||S.me.role==="admin";
+  dr.innerHTML = `
+    <button class="close" onclick="document.getElementById('drawer').classList.remove('on')">閉じる</button>
+    <h3>${esc(t.title)||"(無題)"}</h3>
+    <div class="sp"><span class="pill cat">${t.category?CAT[t.category]||t.category:'未分類'}</span>
+      <span class="pill">${esc(t.status)}</span>
+      <span class="mut">${esc(t.client_name)||'クライアント未特定'}</span></div>
+
+    ${d.client_notes?`<div class="box warn"><h4>⚠ クライアント注意事項</h4>${esc(d.client_notes)}</div>`:''}
+
+    <div class="box"><h4>依頼本文</h4><div class="mut" style="white-space:pre-wrap">${esc(t.body)}</div>
+      ${t.source_url?`<p><a href="${esc(t.source_url)}" target="_blank" class="mut">元メッセージを開く ↗</a></p>`:''}</div>
+
+    ${d.missing_info.length?`<div class="box"><h4>不足情報（要確認）</h4><ul>${d.missing_info.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:''}
+
+    <div class="box"><h4>担当候補（根拠つき）</h4>
+      ${d.suggested.map(c=>`<div class="cand"><div><b>${esc(c.staff_name)}</b> <span class="mut">${esc(c.reason)}</span></div>
+        ${mgr?`<button onclick="assign('${t.id}','${c.staff_id}')">この人に割当</button>`:`<span class="mut">score ${c.score}</span>`}</div>`).join("")||'<span class="mut">候補なし</span>'}
+    </div>
+
+    <div class="box"><h4>実績時間（15分単位）</h4>
+      <div class="sp"><input id="mins" type="number" step="15" min="15" placeholder="分" style="width:90px">
+        <input id="tnote" placeholder="メモ" style="flex:1">
+        <button onclick="addTime('${t.id}')">記録</button></div>
+      <p class="mut">想定 ${t.estimate_min??"—"}分 / 実績 ${d.time_total}分</p>
+      <button class="ghost" onclick="complete('${t.id}')">完了にする</button>
+    </div>
+
+    ${mgr?`<div class="box"><h4>確認文案（送信は3ゲートでブロック）</h4>
+      <div class="sp"><button onclick="makeDraft('${t.id}')">文案を生成</button>
+        <span class="mut">口座送信可否: ${d.outbound_enabled?'<span class="ok">ON</span>':'<span class="bad">OFF</span>'}</span></div>
+      ${d.drafts.map(df=>`<div class="box" style="margin-top:8px"><div class="mut" style="white-space:pre-wrap">${esc(df.body)}</div>
+        <div class="sp" style="margin-top:8px"><span class="pill">${df.status}</span>
+          ${df.status==="pending"?`<button onclick="approve('${df.id}')">承認</button>`:''}
+          ${df.status==="approved"?`<button onclick="send('${df.id}')">送信</button>`:''}</div></div>`).join("")}
+    </div>`:''}`;
+}
+
+async function assign(tid,sid){ const r=await api(`/api/tasks/${tid}/assign`,{method:"POST",body:JSON.stringify({staff_id:sid})});
+  if(r.ok){ await loadInbox(); openTask(tid); } else alert(r.error||"失敗"); }
+async function addTime(tid){ const m=Number(document.getElementById("mins").value); const note=document.getElementById("tnote").value;
+  const r=await api(`/api/tasks/${tid}/time`,{method:"POST",body:JSON.stringify({minutes:m,note})}); if(!r.ok)alert(r.error); openTask(tid); }
+async function complete(tid){ await api(`/api/tasks/${tid}/complete`,{method:"POST",body:"{}"}); await loadInbox(); openTask(tid); }
+async function makeDraft(tid){ await api(`/api/tasks/${tid}/draft`,{method:"POST",body:"{}"}); openTask(tid); }
+async function approve(did){ const r=await api(`/api/drafts/${did}/approve`,{method:"POST",body:"{}"}); if(!r.ok)alert(r.error); refreshDrawer(); }
+async function send(did){ const r=await api(`/api/drafts/${did}/send`,{method:"POST",body:"{}"}); alert(r.ok?"送信しました":("送信ブロック: "+r.error)); refreshDrawer(); }
+let _cur=null; const _open=openTask; openTask=async(id)=>{_cur=id; return _open(id);}; function refreshDrawer(){ if(_cur) _open(_cur); }
+
+boot();
+</script>
+</body>
+</html>
