@@ -14,6 +14,8 @@ import { addTimeEntry, completeTask } from "./analytics/timeEntries.js";
 import { generateDraft, approveDraft, sendDraft } from "./drafts/drafts.js";
 import { metrics } from "./metrics/metrics.js";
 import { setClientNotes, setAccountFlags } from "./channels/accounts.js";
+import { generateDocument, getDocument, approveDocument, renderDocumentHtml, renderDocumentPdf } from "./documents/documents.js";
+import { estimateVsActual, workloadByStaff, revenueByClient } from "./analytics/revenue.js";
 
 migrate();
 
@@ -116,6 +118,34 @@ app.post("/api/channel-accounts/flags", requireRole("manager", "admin"), (req: R
   if (!channel || !identifier) return res.status(400).json({ error: "channel/identifier required" });
   res.json(setAccountFlags(channel, identifier, { inbound, outbound }));
 });
+
+// --- Phase 6C: 見積・請求 書類 ---
+app.post("/api/tasks/:id/quote", requireRole("manager", "admin"), (req: Req, res) => {
+  res.json(generateDocument(req.params.id, "quotation", req.viewer!.name));
+});
+app.post("/api/tasks/:id/invoice", requireRole("manager", "admin"), (req: Req, res) => {
+  res.json(generateDocument(req.params.id, "invoice", req.viewer!.name));
+});
+app.get("/api/documents/:id", (req: Req, res) => {
+  const v = needViewer(req, res); if (!v) return;
+  const d = getDocument(req.params.id);
+  if (!d) return res.status(404).json({ error: "not found" });
+  res.json({ ...d, html: renderDocumentHtml(req.params.id) });
+});
+app.post("/api/documents/:id/approve", requireRole("manager", "admin"), (req: Req, res) => {
+  const r = approveDocument(req.params.id, req.viewer!.name);
+  res.status(r.ok ? 200 : 400).json(r);
+});
+app.get("/api/documents/:id/pdf", requireRole("manager", "admin"), (req: Req, res) => {
+  const r = renderDocumentPdf(req.params.id);
+  if (!r.ok) return res.status(400).json(r);
+  res.type("html").send(r.html);
+});
+
+// --- Phase 6D: 工数・収益の可視化 ---
+app.get("/api/analytics/estimate-actual", requireRole("manager", "admin"), (_req, res) => res.json(estimateVsActual()));
+app.get("/api/analytics/workload", requireRole("manager", "admin"), (_req, res) => res.json(workloadByStaff()));
+app.get("/api/analytics/revenue", requireRole("manager", "admin"), (_req, res) => res.json(revenueByClient()));
 
 // 期限超過の軽いチェック（記録のみ）
 function overdueSweep(): void {

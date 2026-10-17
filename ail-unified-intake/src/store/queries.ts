@@ -35,6 +35,7 @@ export interface TaskDetail {
   missing_info: string[];
   time_total: number;
   drafts: any[];
+  documents: any[];
 }
 
 export function taskDetail(taskId: string): TaskDetail | null {
@@ -60,6 +61,7 @@ export function taskDetail(taskId: string): TaskDetail | null {
 
   const time_total = (db.prepare("SELECT COALESCE(SUM(minutes),0) s FROM time_entries WHERE task_id=?").get(taskId) as any).s;
   const drafts = db.prepare("SELECT id, status, body, created_at FROM confirmation_drafts WHERE task_id=? ORDER BY created_at DESC").all(taskId);
+  const documents = db.prepare("SELECT id, type, title, status, total_text, created_at FROM documents WHERE task_id=? ORDER BY created_at DESC").all(taskId);
 
   return {
     task,
@@ -69,5 +71,6 @@ export function taskDetail(taskId: string): TaskDetail | null {
     missing_info: missing,
     time_total,
     drafts,
+    documents,
   };
 }

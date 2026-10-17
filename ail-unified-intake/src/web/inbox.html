@@ -100,18 +100,35 @@ function renderTable(){
 }
 
 async function renderAnalytics(){
-  const m = await api("/api/metrics");
+  const [m,ea,wl,rev] = await Promise.all([
+    api("/api/metrics"), api("/api/analytics/estimate-actual"),
+    api("/api/analytics/workload"), api("/api/analytics/revenue")]);
   document.getElementById("main").innerHTML = `
     <div class="box"><h4>実測メトリクス（品質・速度評価は実装せず、素の実測のみ）</h4>
     <table>
       <tr><td>総タスク</td><td>${m.total}</td></tr>
-      <tr><td>解析済み</td><td>${m.analyzed}</td></tr>
-      <tr><td>割当済み</td><td>${m.assigned}</td></tr>
-      <tr><td>完了</td><td>${m.done}</td></tr>
+      <tr><td>解析済み / 割当済み / 完了</td><td>${m.analyzed} / ${m.assigned} / ${m.done}</td></tr>
       <tr><td>自動化率（解析到達）</td><td>${m.automation_rate==null?"—":(m.automation_rate*100).toFixed(0)+"%"}</td></tr>
       <tr><td>確認要した率</td><td>${(m.human_edit_rate*100).toFixed(0)}%</td></tr>
-    </table>
-    <p class="mut">※ 完了数・実績時間・想定対実績差・差戻し率の実データが貯まってから評価ロジックを定義します。</p></div>`;
+    </table></div>
+
+    <div class="box"><h4>想定対実績差（タスク単位）</h4>
+      <table><thead><tr><th>件名</th><th>想定</th><th>実績</th><th>差</th></tr></thead><tbody>
+      ${ea.rows.map(r=>`<tr><td>${esc(r.title)||"(無題)"}</td><td>${r.estimate_min??"—"}</td><td>${r.actual_min}</td>
+        <td class="${r.diff_min>0?'bad':'ok'}">${r.diff_min==null?"—":(r.diff_min>0?"+":"")+r.diff_min}分</td></tr>`).join("")||'<tr><td colspan=4 class="mut">実績未記録</td></tr>'}
+      </tbody><tfoot><tr><td>合計</td><td>${ea.total_estimate}分</td><td>${ea.total_actual}分</td><td>${(ea.total_actual-ea.total_estimate>=0?"+":"")+(ea.total_actual-ea.total_estimate)}分</td></tr></tfoot></table></div>
+
+    <div class="box"><h4>スタッフ別工数</h4>
+      <table><thead><tr><th>スタッフ</th><th>実績</th><th>担当件数</th></tr></thead><tbody>
+      ${wl.map(r=>`<tr><td>${esc(r.staff_name)}</td><td>${r.actual_min}分（${(r.actual_min/60).toFixed(1)}h）</td><td>${r.tasks}</td></tr>`).join("")}
+      </tbody></table></div>
+
+    <div class="box"><h4>クライアント別収益（time課金＝実績×時間単価）</h4>
+      <table><thead><tr><th>クライアント</th><th>課金</th><th>実績</th><th>収益</th><th>備考</th></tr></thead><tbody>
+      ${rev.rows.map(r=>`<tr><td>${esc(r.client_name)}</td><td>${esc(r.billing_type)}</td><td>${r.actual_min}分</td>
+        <td>${r.revenue==null?"—":"¥"+r.revenue.toLocaleString()}</td><td class="mut">${esc(r.note)}</td></tr>`).join("")}
+      </tbody><tfoot><tr><td colspan=3>合計収益</td><td>¥${rev.total_revenue.toLocaleString()}</td><td></td></tr></tfoot></table>
+      <p class="mut">※ 金額はAIが確定しません。収益は実績時間×設定単価の目安です。</p></div>`;
 }
 
 async function openTask(id){
@@ -153,6 +170,19 @@ async function openTask(id){
         <div class="sp" style="margin-top:8px"><span class="pill">${df.status}</span>
           ${df.status==="pending"?`<button onclick="approve('${df.id}')">承認</button>`:''}
           ${df.status==="approved"?`<button onclick="send('${df.id}')">送信</button>`:''}</div></div>`).join("")}
+    </div>
+
+    <div class="box"><h4>書類（見積・請求）— 金額はAIが確定しない</h4>
+      <div class="sp"><button onclick="makeDoc('${t.id}','quotation')">見積書ドラフト</button>
+        <button onclick="makeDoc('${t.id}','invoice')">請求書ドラフト</button></div>
+      ${(d.documents||[]).map(dc=>`<div class="box" style="margin-top:8px">
+        <div class="sp"><b>${dc.type==="quotation"?"見積書":"請求書"}</b><span class="pill">${dc.status}</span>
+          <span class="mut">合計: ${esc(dc.total_text)}</span></div>
+        <div class="sp" style="margin-top:6px">
+          <button class="ghost" onclick="viewDoc('${dc.id}')">プレビュー</button>
+          ${dc.status==="draft"?`<button onclick="approveDoc('${dc.id}')">承認（PDF化承認者）</button>`:''}
+          ${dc.status==="approved"?`<button class="ghost" onclick="pdfDoc('${dc.id}')">PDF化</button>`:''}</div>
+        <div id="docview_${dc.id}"></div></div>`).join("")||'<p class="mut">まだ書類はありません</p>'}
     </div>`:''}`;
 }
 
@@ -162,6 +192,11 @@ async function addTime(tid){ const m=Number(document.getElementById("mins").valu
   const r=await api(`/api/tasks/${tid}/time`,{method:"POST",body:JSON.stringify({minutes:m,note})}); if(!r.ok)alert(r.error); openTask(tid); }
 async function complete(tid){ await api(`/api/tasks/${tid}/complete`,{method:"POST",body:"{}"}); await loadInbox(); openTask(tid); }
 async function makeDraft(tid){ await api(`/api/tasks/${tid}/draft`,{method:"POST",body:"{}"}); openTask(tid); }
+async function makeDoc(tid,type){ await api(`/api/tasks/${tid}/${type==="quotation"?"quote":"invoice"}`,{method:"POST",body:"{}"}); refreshDrawer(); }
+async function viewDoc(did){ const d=await api(`/api/documents/${did}`); const el=document.getElementById("docview_"+did);
+  el.innerHTML = `<iframe style="width:100%;height:320px;border:1px solid var(--line);border-radius:8px;background:#fff" srcdoc="${(d.html||'').replace(/"/g,'&quot;')}"></iframe>`; }
+async function approveDoc(did){ const r=await api(`/api/documents/${did}/approve`,{method:"POST",body:"{}"}); if(!r.ok)alert(r.error); refreshDrawer(); }
+async function pdfDoc(did){ const r=await fetch(`/api/documents/${did}/pdf`,{headers:H()}); if(r.ok){ const html=await r.text(); const w=window.open("","_blank"); w.document.write(html);} else { const e=await r.json(); alert("PDF化ブロック: "+(e.error||"")); } }
 async function approve(did){ const r=await api(`/api/drafts/${did}/approve`,{method:"POST",body:"{}"}); if(!r.ok)alert(r.error); refreshDrawer(); }
 async function send(did){ const r=await api(`/api/drafts/${did}/send`,{method:"POST",body:"{}"}); alert(r.ok?"送信しました":("送信ブロック: "+r.error)); refreshDrawer(); }
 let _cur=null; const _open=openTask; openTask=async(id)=>{_cur=id; return _open(id);}; function refreshDrawer(){ if(_cur) _open(_cur); }
