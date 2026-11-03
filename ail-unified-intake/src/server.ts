@@ -7,7 +7,7 @@ import { db, migrate } from "./db.js";
 import { config } from "./config.js";
 import { ingest } from "./ingest/pipeline.js";
 import { processAll } from "./jobs/worker.js";
-import { authn, requireRole, scopeWhere, type Viewer } from "./auth/rbac.js";
+import { authn, requireRole, scopeWhere, taskInScope, documentInScope, type Viewer } from "./auth/rbac.js";
 import { listInboxScoped, taskDetail } from "./store/queries.js";
 import { assignTask, suggestCandidates } from "./assign/assign.js";
 import { addTimeEntry, completeTask } from "./analytics/timeEntries.js";
@@ -68,6 +68,9 @@ app.get("/api/metrics", requireRole("manager", "admin"), (_req, res) => res.json
 
 app.get("/api/tasks/:id", (req: Req, res) => {
   const v = needViewer(req, res); if (!v) return;
+  const ok = taskInScope(v, req.params.id);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   const d = taskDetail(req.params.id);
   if (!d) return res.status(404).json({ error: "not found" });
   res.json(d);
@@ -75,26 +78,41 @@ app.get("/api/tasks/:id", (req: Req, res) => {
 
 app.get("/api/candidates/:taskId", (req: Req, res) => {
   const v = needViewer(req, res); if (!v) return;
+  const ok = taskInScope(v, req.params.taskId);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   res.json(suggestCandidates(req.params.taskId));
 });
 
 app.post("/api/tasks/:id/assign", requireRole("manager", "admin"), (req: Req, res) => {
+  const ok = taskInScope(req.viewer!, req.params.id);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   const r = assignTask(req.params.id, req.body?.staff_id, req.viewer!.name);
   res.status(r.ok ? 200 : 400).json(r);
 });
 
 app.post("/api/tasks/:id/time", (req: Req, res) => {
   const v = needViewer(req, res); if (!v) return;
+  const ok = taskInScope(v, req.params.id);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   const r = addTimeEntry(req.params.id, req.body?.staff_id ?? v.staffId, Number(req.body?.minutes), req.body?.note ?? null, v.name);
   res.status(r.ok ? 200 : 400).json(r);
 });
 
 app.post("/api/tasks/:id/complete", (req: Req, res) => {
   const v = needViewer(req, res); if (!v) return;
+  const ok = taskInScope(v, req.params.id);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   res.json(completeTask(req.params.id, v.name));
 });
 
 app.post("/api/tasks/:id/draft", requireRole("manager", "admin"), (req: Req, res) => {
+  const ok = taskInScope(req.viewer!, req.params.id);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   res.json(generateDraft(req.params.id, req.viewer!.name));
 });
 
@@ -121,13 +139,22 @@ app.post("/api/channel-accounts/flags", requireRole("manager", "admin"), (req: R
 
 // --- Phase 6C: 見積・請求 書類 ---
 app.post("/api/tasks/:id/quote", requireRole("manager", "admin"), (req: Req, res) => {
+  const ok = taskInScope(req.viewer!, req.params.id);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   res.json(generateDocument(req.params.id, "quotation", req.viewer!.name));
 });
 app.post("/api/tasks/:id/invoice", requireRole("manager", "admin"), (req: Req, res) => {
+  const ok = taskInScope(req.viewer!, req.params.id);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   res.json(generateDocument(req.params.id, "invoice", req.viewer!.name));
 });
 app.get("/api/documents/:id", (req: Req, res) => {
   const v = needViewer(req, res); if (!v) return;
+  const ok = documentInScope(v, req.params.id);
+  if (ok === null) return res.status(404).json({ error: "not found" });
+  if (!ok) return res.status(403).json({ error: "forbidden" });
   const d = getDocument(req.params.id);
   if (!d) return res.status(404).json({ error: "not found" });
   res.json({ ...d, html: renderDocumentHtml(req.params.id) });

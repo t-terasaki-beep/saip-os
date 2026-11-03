@@ -37,3 +37,19 @@ export function scopeWhere(v: Viewer): Scope {
   if (v.role === "manager") return { clause: "t.manager_id = ?", params: [v.staffId] };
   return { clause: "t.assignee_id = ?", params: [v.staffId] };
 }
+
+// 個別タスクのスコープ検査。タスクが存在しなければ null、存在するがスコープ外なら false。
+export function taskInScope(v: Viewer, taskId: string): boolean | null {
+  const scope = scopeWhere(v);
+  const row = db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${scope.clause}`).get(taskId, ...scope.params);
+  if (row) return true;
+  const exists = db.prepare("SELECT 1 FROM tasks WHERE id = ?").get(taskId);
+  return exists ? false : null;
+}
+
+// 書類（documents）のスコープ検査。書類→タスクの紐づきで判定。
+export function documentInScope(v: Viewer, docId: string): boolean | null {
+  const doc = db.prepare("SELECT task_id FROM documents WHERE id = ?").get(docId) as { task_id: string } | undefined;
+  if (!doc) return null;
+  return taskInScope(v, doc.task_id);
+}
